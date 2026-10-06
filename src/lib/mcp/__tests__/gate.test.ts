@@ -22,9 +22,10 @@ const USER = { type: 'user', userId: 'u1' } as const;
 const SERVICE = { type: 'service', keyName: 'bot' } as const;
 
 /** The row that the gate selects, and the payload that it returns for it. */
-function row(released: boolean) {
+function row(released: boolean, administrativeBodyId: string | null = 'council') {
     return {
         released,
+        administrativeBodyId,
         dateTime: new Date('2026-05-12T18:00:00Z'),
         name: null,
         name_en: null,
@@ -36,9 +37,10 @@ function row(released: boolean) {
         city: { timezone: 'Europe/Athens' },
     };
 }
-function payload(released: boolean, editor: boolean | null) {
+function payload(released: boolean, editor: boolean | null, administrativeBodyId: string | null = 'council') {
     return {
         released,
+        administrativeBodyId,
         dateTime: new Date('2026-05-12T18:00:00Z'),
         name: 'Δημοτικό Συμβούλιο · Τακτική Συνεδρίαση · 12/05/2026',
         videoUrl: null,
@@ -82,6 +84,35 @@ describe('requireVisibleMeeting', () => {
         mockMeetingFindFirst.mockResolvedValue(row(false));
         mockUserFindUnique.mockResolvedValue({ isSuperAdmin: false, administers: [{ cityId: 'argos' }] });
         await expect(requireVisibleMeeting('athens', 'm1', USER)).rejects.toThrow(NotFoundError);
+    });
+
+    it('shows a body administrator the unreleased meetings of their body, and no other', async () => {
+        const asBodyAdmin = (bodyId: string, cityId: string) => mockUserFindUnique.mockResolvedValue({
+            isSuperAdmin: false,
+            administers: [{ cityId: null, administrativeBodyId: bodyId, administrativeBody: { cityId } }],
+        });
+        mockMeetingFindFirst.mockResolvedValue(row(false));
+
+        asBodyAdmin('council', 'athens');
+        await expect(requireVisibleMeeting('athens', 'm1', USER)).resolves.toEqual(payload(false, true));
+
+        asBodyAdmin('committee', 'athens');
+        await expect(requireVisibleMeeting('athens', 'm1', USER)).rejects.toThrow(NotFoundError);
+
+        // The same body id, administered under another city.
+        asBodyAdmin('council', 'argos');
+        await expect(requireVisibleMeeting('athens', 'm1', USER)).rejects.toThrow(NotFoundError);
+
+        // A draft with no body is the city admin's.
+        mockMeetingFindFirst.mockResolvedValue(row(false, null));
+        asBodyAdmin('council', 'athens');
+        await expect(requireVisibleMeeting('athens', 'm1', USER)).rejects.toThrow(NotFoundError);
+    });
+
+    it('reads the body of the meeting in the same query', async () => {
+        mockMeetingFindFirst.mockResolvedValue(row(true));
+        await requireVisibleMeeting('athens', 'm1', null);
+        expect(mockMeetingFindFirst.mock.calls[0][0].select).toMatchObject({ administrativeBodyId: true });
     });
 
     it('404s missing meetings for everyone', async () => {
