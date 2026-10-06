@@ -39,6 +39,10 @@ import { useToast } from "@/hooks/use-toast"
 import { toPhoneticLatin as toGreeklish } from 'greek-utils'
 /** An optional name override: empty, or at least two characters. */
 const nameOverride = (message: string) => z.string().refine(val => val.trim() === '' || val.trim().length >= 2, { message })
+/** The body selector stores "none" for no body; an upload config takes the id or nothing. */
+function uploadBodyId(value: string | undefined): string | undefined {
+    return value && value !== 'none' ? value : undefined
+}
 
 const formSchema = z.object({
     name: nameOverride("Meeting name must be at least 2 characters."),
@@ -99,9 +103,14 @@ interface AddMeetingFormProps {
     cityId: string;
     meeting?: CouncilMeeting;
     onSuccess?: () => void;
+    /**
+     * The bodies a body admin may create meetings for. Absent for a city
+     * admin, who may pick any body or none. With one body, it is preselected.
+     */
+    allowedBodyIds?: string[];
 }
 
-export default function AddMeetingForm({ cityId, meeting, onSuccess }: AddMeetingFormProps) {
+export default function AddMeetingForm({ cityId, meeting, onSuccess, allowedBodyIds }: AddMeetingFormProps) {
     const router = useRouter()
     const { toast } = useToast()
     const [isSubmitting, setIsSubmitting] = useState(false)
@@ -121,7 +130,7 @@ export default function AddMeetingForm({ cityId, meeting, onSuccess }: AddMeetin
             youtubeUrl: meeting?.youtubeUrl || "",
             agendaUrl: meeting?.agendaUrl || "",
             meetingId: meeting?.id ?? "",
-            administrativeBodyId: meeting?.administrativeBodyId || "none",
+            administrativeBodyId: meeting?.administrativeBodyId || (allowedBodyIds?.length === 1 ? allowedBodyIds[0] : "none"),
             processAgenda: true,
             kind: meeting ? meeting.kind : MeetingKind.regular,
             scheduleStatus: meeting?.scheduleStatus ?? MeetingScheduleStatus.scheduled,
@@ -165,9 +174,10 @@ export default function AddMeetingForm({ cityId, meeting, onSuccess }: AddMeetin
         // Fetch administrative bodies for the city
         fetch(`/api/cities/${cityId}/administrative-bodies`)
             .then(res => res.json())
-            .then(data => setAdministrativeBodies(data))
+            .then((data: Array<{ id: string, name: string, type: string, place: string | null }>) =>
+                setAdministrativeBodies(allowedBodyIds ? data.filter(body => allowedBodyIds.includes(body.id)) : data))
             .catch(err => console.error('Failed to fetch administrative bodies:', err));
-    }, [cityId])
+    }, [cityId, allowedBodyIds])
 
     useEffect(() => {
         fetch(postponementCandidatesUrl(cityId, meetingDay ? new Date(meetingDay) : new Date()))
@@ -285,9 +295,11 @@ export default function AddMeetingForm({ cityId, meeting, onSuccess }: AddMeetin
                                         </SelectTrigger>
                                     </FormControl>
                                     <SelectContent>
-                                        <SelectItem value="none">
-                                            {t('noAdministrativeBody')}
-                                        </SelectItem>
+                                        {!allowedBodyIds && (
+                                            <SelectItem value="none">
+                                                {t('noAdministrativeBody')}
+                                            </SelectItem>
+                                        )}
                                         {administrativeBodies.map((body) => (
                                             <SelectItem key={body.id} value={body.id}>
                                                 {body.name} ({t(`administrativeBodyType.${body.type.toLowerCase()}`)})
@@ -451,7 +463,7 @@ export default function AddMeetingForm({ cityId, meeting, onSuccess }: AddMeetin
                         name="youtubeUrl"
                         render={({ field }) => {
                             const meetingId = form.watch('meetingId') || formatDateAsMeetingId(form.watch('date') ?? new Date())
-                            
+                            const administrativeBodyId = uploadBodyId(form.watch('administrativeBodyId'))
                             return (
                                 <FormItem>
                                     <FormLabel>{t('meetingVideo')}</FormLabel>
@@ -463,7 +475,8 @@ export default function AddMeetingForm({ cityId, meeting, onSuccess }: AddMeetin
                                             config={meetingId ? {
                                                 cityId,
                                                 identifier: meetingId,
-                                                suffix: 'recording'
+                                                suffix: 'recording',
+                                                administrativeBodyId,
                                             } : undefined}
                                         />
                                     </FormControl>
@@ -481,7 +494,7 @@ export default function AddMeetingForm({ cityId, meeting, onSuccess }: AddMeetin
                         name="agendaUrl"
                         render={({ field }) => {
                             const meetingId = form.watch('meetingId') || formatDateAsMeetingId(form.watch('date') ?? new Date())
-                            
+                            const administrativeBodyId = uploadBodyId(form.watch('administrativeBodyId'))
                             return (
                                 <FormItem>
                                     <FormLabel>{t('meetingAgenda')}</FormLabel>
@@ -493,7 +506,8 @@ export default function AddMeetingForm({ cityId, meeting, onSuccess }: AddMeetin
                                             config={meetingId ? {
                                                 cityId,
                                                 identifier: meetingId,
-                                                suffix: 'agenda'
+                                                suffix: 'agenda',
+                                                administrativeBodyId,
                                             } : undefined}
                                         />
                                     </FormControl>

@@ -18,7 +18,7 @@ export async function requestProcessAgenda(agendaUrl: string, councilMeetingId: 
 }: {
     force?: boolean;
 } = {}) {
-    await withUserAuthorizedToEdit({ cityId });
+    await withUserAuthorizedToEdit({ cityId, councilMeetingId });
     return requestProcessAgendaInternal(agendaUrl, councilMeetingId, cityId, { force });
 }
 

@@ -6,6 +6,7 @@ import { handleApiError } from '@/lib/api/errors';
 import { isUserAuthorizedToEdit, withUserAuthorizedToEdit } from '@/lib/auth';
 import { meetingSchema } from '@/lib/zod-schemas/meeting';
 import { updateMeetingWithEffects } from '@/lib/meetingWrites';
+import { getCouncilMeetingDirect } from '@/lib/db/meetings';
 
 export async function GET(
     request: Request,
@@ -56,7 +57,7 @@ export async function PUT(
 ) {
     const params = await props.params;
     try {
-        await withUserAuthorizedToEdit({ cityId: params.cityId });
+        await withUserAuthorizedToEdit({ cityId: params.cityId, councilMeetingId: params.meetingId });
         const body = await request.json();
         // The URL names the meeting, and an edit queues no agenda task. Every
         // other field of the schema is a field of the record, so a field that
@@ -65,6 +66,20 @@ export async function PUT(
             meetingId: _meetingId, processAgenda: _processAgenda,
             date, youtubeUrl, agendaUrl, administrativeBodyId, ...record
         } = meetingSchema.parse(body);
+
+        // Moving the meeting to another body, or to no body, needs rights on
+        // the destination too: a body admin may not hand their meeting over or
+        // take a meeting of another body.
+        const current = await getCouncilMeetingDirect(params.cityId, params.meetingId);
+        if (!current) {
+            return NextResponse.json({ error: 'Meeting not found' }, { status: 404 });
+        }
+        const nextBodyId = administrativeBodyId || null;
+        if (nextBodyId !== current.administrativeBodyId) {
+            await withUserAuthorizedToEdit(nextBodyId
+                ? { cityId: params.cityId, administrativeBodyId: nextBodyId }
+                : { cityId: params.cityId });
+        }
 
         // A field that the request leaves out keeps its value.
         const meeting = await updateMeetingWithEffects(params.cityId, params.meetingId, {
