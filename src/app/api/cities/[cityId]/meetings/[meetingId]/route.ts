@@ -67,20 +67,19 @@ export async function PUT(
             date, youtubeUrl, agendaUrl, administrativeBodyId, ...record
         } = meetingSchema.parse(body);
 
+        const current = await getCouncilMeetingDirect(params.cityId, params.meetingId);
+        if (!current) {
+            return NextResponse.json({ error: 'Meeting not found' }, { status: 404 });
+        }
+
         // An absent body leaves the meeting where it is. Moving it to another
         // body, or to no body, needs rights on the destination too: a body
         // admin may not hand their meeting over or take one of another body.
         const nextBodyId = administrativeBodyId === undefined ? undefined : administrativeBodyId || null;
-        if (nextBodyId !== undefined) {
-            const current = await getCouncilMeetingDirect(params.cityId, params.meetingId);
-            if (!current) {
-                return NextResponse.json({ error: 'Meeting not found' }, { status: 404 });
-            }
-            if (nextBodyId !== current.administrativeBodyId) {
-                await withUserAuthorizedToEdit(nextBodyId
-                    ? { cityId: params.cityId, administrativeBodyId: nextBodyId }
-                    : { cityId: params.cityId });
-            }
+        if (nextBodyId !== undefined && nextBodyId !== current.administrativeBodyId) {
+            await withUserAuthorizedToEdit(nextBodyId
+                ? { cityId: params.cityId, administrativeBodyId: nextBodyId }
+                : { cityId: params.cityId });
         }
 
         // A field that the request leaves out keeps its value.
