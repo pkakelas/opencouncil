@@ -3,6 +3,7 @@
 // API route — authorize before calling. Kept apart from meetings.ts as its own
 // concern: the list queries, their payload types and the page size.
 import "server-only";
+import { unreleasedMeetingWhere, type UnreleasedScope } from '@/lib/unreleased';
 import { AdministrativeBodyType, Prisma } from '@prisma/client';
 import prisma from "./prisma";
 
@@ -71,7 +72,10 @@ export type CouncilMeetingWithSubjectPreview = Prisma.CouncilMeetingGetPayload<{
 };
 
 export interface MeetingListOptions {
+    /** Every unreleased meeting. Prefer `unreleased`, which names whose they are. */
     includeUnreleased?: boolean;
+    /** The unreleased meetings the viewer may see; released only when absent. */
+    unreleased?: UnreleasedScope;
     limit?: number;
     page?: number;
     pageSize?: number;
@@ -100,7 +104,7 @@ export const DEFAULT_MEETING_PAGE_SIZE = 12;
  */
 function meetingListQuery(
     cityId: string,
-    { includeUnreleased, limit, page, pageSize = DEFAULT_MEETING_PAGE_SIZE, from, to, administrativeBodyTypes, administrativeBodyIds, timeFilter }: MeetingListOptions,
+    { includeUnreleased, unreleased, limit, page, pageSize = DEFAULT_MEETING_PAGE_SIZE, from, to, administrativeBodyTypes, administrativeBodyIds, timeFilter }: MeetingListOptions,
 ) {
     // Calculate pagination
     const skip = page ? (page - 1) * pageSize : undefined;
@@ -139,11 +143,12 @@ function meetingListQuery(
             : { administrativeBody: { type: { in: administrativeBodyTypes } } };
     }
 
+    // The visibility filter and the body filter can both be an OR, so they
+    // meet under AND rather than spread into one object.
     const where: Prisma.CouncilMeetingWhereInput = {
         cityId,
-        released: includeUnreleased ? undefined : true,
         ...(Object.keys(dateTimeFilter).length > 0 && { dateTime: dateTimeFilter }),
-        ...bodyFilter,
+        AND: [includeUnreleased ? {} : unreleasedMeetingWhere(unreleased), bodyFilter],
     };
 
     return {

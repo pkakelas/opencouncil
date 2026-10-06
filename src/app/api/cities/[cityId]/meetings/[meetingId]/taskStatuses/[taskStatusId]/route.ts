@@ -7,6 +7,7 @@ import { deleteTaskStatus } from '@/lib/db/tasks';
 import { getTaskStatusDirect } from '@/lib/db/tasksInternal';
 import { verifyCallbackToken } from '@/lib/tasks/callbackToken';
 import { isUserAuthorizedToEdit } from '@/lib/auth';
+import { taskScope } from '@/lib/tasks/types';
 
 export async function GET(request: NextRequest, props: { params: Promise<{ taskStatusId: string }> }) {
     const params = await props.params;
@@ -15,7 +16,7 @@ export async function GET(request: NextRequest, props: { params: Promise<{ taskS
         return NextResponse.json({ error: 'Task status not found' }, { status: 404 });
     }
 
-    const authorized = await isUserAuthorizedToEdit({ cityId: taskStatus.cityId });
+    const authorized = await isUserAuthorizedToEdit(taskScope(taskStatus));
     if (!authorized) {
         // Task bodies can contain sensitive payloads. Public callers
         // (e.g. decision polling on subject pages) only need progress fields.
@@ -44,7 +45,7 @@ export async function DELETE(request: NextRequest, props: { params: Promise<{ ta
         return NextResponse.json({ error: 'Task status not found' }, { status: 404 });
     }
 
-    const authorized = await isUserAuthorizedToEdit({ cityId: taskStatus.cityId });
+    const authorized = await isUserAuthorizedToEdit(taskScope(taskStatus));
     if (!authorized) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
