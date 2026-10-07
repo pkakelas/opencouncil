@@ -14,7 +14,7 @@ jest.mock('../../auth', () => ({
 }));
 jest.mock('../../db/prisma', () => ({
   __esModule: true,
-  default: { taskStatus: { findUnique: (...args: unknown[]) => mockTaskFindUnique(...args) } },
+  default: { taskStatus: { findUnique: (...args: unknown[]) => mockTaskFindUnique(...args), updateMany: jest.fn() } },
 }));
 jest.mock('../fixTranscriptInternal', () => ({
   requestFixTranscriptInternal: (...args: unknown[]) => mockStartTask(...args),
@@ -34,7 +34,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockWithUserAuthorizedToEdit.mockResolvedValue(true);
   mockTaskFindUnique.mockResolvedValue({
-    id: 'task-1', type: 'transcribe', cityId: 'other-city', councilMeetingId: 'other-meeting', responseBody: '{}',
+    id: 'task-1', type: 'transcribe', status: 'failed', cityId: 'other-city', councilMeetingId: 'other-meeting', responseBody: '{}',
   });
 });
 
@@ -64,7 +64,7 @@ describe('processTaskResponse', () => {
   });
 
   it("authorizes against the task's city when the task has no meeting", async () => {
-    mockTaskFindUnique.mockResolvedValue({ id: 'task-1', type: 'transcribe', cityId: 'other-city', councilMeetingId: null, responseBody: '{}' });
+    mockTaskFindUnique.mockResolvedValue({ id: 'task-1', type: 'transcribe', status: 'failed', cityId: 'other-city', councilMeetingId: null, responseBody: '{}' });
     await processTaskResponse('transcribe', 'task-1');
     expect(mockWithUserAuthorizedToEdit).toHaveBeenCalledWith({ cityId: 'other-city' });
   });
