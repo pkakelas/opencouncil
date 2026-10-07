@@ -1,9 +1,10 @@
-import type { MeetingKind, MeetingScheduleStatus } from "@prisma/client";
+import type { AdministrativeBodyType, MeetingKind, MeetingScheduleStatus } from "@prisma/client";
 import { takesPlace } from "@/lib/meetingLifecycleRules";
 import { isLogodosiaMeeting, pollDueAt } from "./pollDecisionsBackoff";
 import { MeetingDecisionCounts } from "../db/decisions";
+import { isSecondaryBody } from "@/lib/utils/bodyTier";
 
-export type PollSkipReason = "notTakingPlace" | "logodosia" | "noEligibleSubjects";
+export type PollSkipReason = "notTakingPlace" | "logodosia" | "noEligibleSubjects" | "secondaryBody";
 
 export interface MeetingPollEligibility {
     meetingId: string;
@@ -27,14 +28,15 @@ export interface PollPartition {
  * Per-meeting gates only — the city-level `diavgeiaUid` requirement is checked
  * separately by the caller (the action is disabled when the city has none).
  *
- * - `skipped`: postponed or cancelled meetings, Λογοδοσία meetings, or meetings
- *   with no decision-eligible subjects.
+ * - `skipped`: postponed or cancelled meetings, Λογοδοσία meetings, meetings of
+ *   a secondary body (which publishes no decisions, #829), or meetings with no
+ *   decision-eligible subjects.
  * - `pollable`: everything else. `alreadyComplete` is true when every eligible
  *   subject already has a linked decision (still pollable for a deliberate
  *   re-poll, but surfaced so the admin knows).
  */
 export function partitionMeetingsForPolling(
-    meetings: { id: string; name: string; kind: MeetingKind | null; scheduleStatus: MeetingScheduleStatus }[],
+    meetings: { id: string; name: string; kind: MeetingKind | null; scheduleStatus: MeetingScheduleStatus; administrativeBody?: { type: AdministrativeBodyType } | null }[],
     decisionCounts: MeetingDecisionCounts,
 ): PollPartition {
     const pollable: MeetingPollEligibility[] = [];
@@ -54,6 +56,8 @@ export function partitionMeetingsForPolling(
             skipReason = "notTakingPlace";
         } else if (isLogodosiaMeeting(meeting)) {
             skipReason = "logodosia";
+        } else if (isSecondaryBody(meeting.administrativeBody)) {
+            skipReason = "secondaryBody";
         } else if (counts.eligible === 0) {
             skipReason = "noEligibleSubjects";
         }

@@ -34,6 +34,10 @@ const TITLE_MIGRATION_PATH = path.join(
     __dirname,
     '../../prisma/migrations/20261009120000_meeting_title/migration.sql',
 )
+const DISABLED_BODIES_MIGRATION_PATH = path.join(
+    __dirname,
+    '../../prisma/migrations/20261009130000_notis_meeting_events_skip_disabled_bodies/migration.sql',
+)
 
 /** The consumer's half of the contract: the Prisma models Notis reads the
  *  views through. Kept in a separate file from the SQL that defines them,
@@ -94,6 +98,10 @@ async function applyNotisMigration() {
         if (/CREATE OR REPLACE (FUNCTION council_meeting_display_name|VIEW "notis_meeting_events")|DROP FUNCTION council_meeting_display_name/.test(statement)) {
             await prisma.$executeRawUnsafe(statement)
         }
+    }
+    // The disabled-bodies migration (#829) keeps that SELECT list and adds a WHERE condition.
+    for (const statement of splitSqlStatements(fs.readFileSync(DISABLED_BODIES_MIGRATION_PATH, 'utf8'))) {
+        await prisma.$executeRawUnsafe(statement)
     }
 }
 
@@ -218,11 +226,26 @@ describe('notis views migration', () => {
             type: 'summarize',
             status: 'succeeded',
         })
+        // A body with its notifications off never reaches Notis (#829): its
+        // meeting's events stay out of the view, released or not.
+        const silentBody = await createAdministrativeBody(city.id, {
+            name: 'Youth council',
+            name_en: 'Youth council',
+            type: 'youthCouncil',
+            notificationBehavior: 'NOTIFICATIONS_DISABLED',
+        })
+        const silent = await createMeeting(city.id, {
+            id: 'nv_meeting_silent',
+            administrativeBodyId: silentBody.id,
+            released: true,
+        })
+        const silentTask = await createTaskStatus(silent.id, city.id, { type: 'summarize', status: 'succeeded' })
 
         const rows = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
             'SELECT * FROM notis_meeting_events',
         )
         expect(rows).toHaveLength(2)
+        expect(rows.find((r) => r.taskId === silentTask.id)).toBeUndefined()
         const row = rows.find((r) => r.taskId === succeeded.id)!
         const hidden = rows.find((r) => r.taskId === unreleasedTask.id)!
         expect(hidden.released).toBe(false)

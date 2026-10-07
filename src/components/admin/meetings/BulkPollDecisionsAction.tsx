@@ -30,6 +30,7 @@ const SKIP_REASON_LABELS = {
     notTakingPlace: 'postponed or cancelled',
     logodosia: 'Λογοδοσία',
     noEligibleSubjects: 'no eligible subjects',
+    secondaryBody: 'no decisions for this body',
 } as const satisfies Record<PollSkipReason, string>;
 
 interface BulkPollDecisionsActionProps {
@@ -53,7 +54,7 @@ export function BulkPollDecisionsAction({
     const partition = useMemo(() => {
         const selected = meetings
             .filter(m => selectedMeetingIds.has(m.id))
-            .map(m => ({ id: m.id, name: meetingLabel(m, 'el', DEFAULT_TIMEZONE), kind: m.kind, scheduleStatus: m.scheduleStatus }));
+            .map(m => ({ id: m.id, name: meetingLabel(m, 'el', DEFAULT_TIMEZONE), kind: m.kind, scheduleStatus: m.scheduleStatus, administrativeBody: m.administrativeBody }));
         return partitionMeetingsForPolling(selected, decisionCounts);
     }, [meetings, selectedMeetingIds, decisionCounts]);
 
