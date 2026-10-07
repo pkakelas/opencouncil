@@ -54,6 +54,16 @@ export const secondaryMeetingWhere = {
 } satisfies Prisma.CouncilMeetingWhereInput;
 
 /**
+ * The URL parameter a city tab reads to widen its scope to the secondary tier:
+ * `?tier=all`. Absent or anything else means the primary tier.
+ */
+export const TIER_PARAM = 'tier';
+
+export function readTier(value: string | string[] | undefined): BodyTier | 'all' {
+    return value === 'all' ? 'all' : 'primary';
+}
+
+/**
  * Whether a person belongs on the municipality's own roster: at least one role
  * that is not on a secondary body (a party, a city office, a primary body), or
  * no role at all. A person whose every role is on a secondary body shows only
