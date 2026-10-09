@@ -140,6 +140,20 @@ describe('pollLivestreamsForRecentMeetings', () => {
         expect(mockMeetingFindMany).not.toHaveBeenCalled();
     });
 
+    it('takes a meeting of a body whose pipeline runs unattended without the agenda task (#829)', async () => {
+        mockMeetingFindMany.mockResolvedValue([meeting({
+            administrativeBody: { name: 'Δημοτικό Συμβούλιο Νέων', type: 'youthCouncil', youtubeChannelUrl: CHANNEL },
+            subjects: [],
+        })]);
+        taskRows([]);
+        aiDecision({ decision: 'match', videoId: 'v1', confidence: 0.9, reasoning: 'aligned' });
+
+        const summary = await pollLivestreamsForRecentMeetings();
+
+        expect(summary.candidates).toBe(1);
+        expect(mockRequestTranscribeInternal).toHaveBeenCalledWith('https://www.youtube.com/watch?v=v1', 'm1', 'athens');
+    });
+
     it('never takes a postponed, cancelled or unrecorded meeting as a candidate', async () => {
         mockMeetingFindMany.mockResolvedValue([]);
         await pollLivestreamsForRecentMeetings();
