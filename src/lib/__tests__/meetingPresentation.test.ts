@@ -27,6 +27,7 @@ const scheduled: MeetingPresentationFields = {
     scheduleStatusReason: null,
     format: 'inPerson',
     closedToPublic: false,
+    noRecording: false,
 };
 
 function signals(overrides: Partial<MeetingStageSignals> = {}): MeetingStageSignals {
@@ -82,6 +83,16 @@ describe('publicMeetingPresentation', () => {
     it('shows a meeting by circulation as held without a recording', () => {
         const byCirculation = { ...scheduled, format: 'byCirculation' as const };
         expect(publicMeetingPresentation(byCirculation, signals(), at(2 * HOUR))).toEqual({ type: 'noRecording', reason: 'byCirculation' });
+    });
+
+    it('reads a meeting that the body marked as not recorded as held with no recording, once it starts (#829)', () => {
+        const notRecorded = { ...scheduled, noRecording: true };
+        expect(publicMeetingPresentation(notRecorded, signals(), at(-DAY))).toEqual({ type: 'stage', stage: 'upcoming' });
+        expect(publicMeetingPresentation(notRecorded, signals(), at(2 * HOUR))).toEqual({ type: 'noRecording', reason: 'notRecorded' });
+        expect(publicMeetingPresentation(notRecorded, signals(), at(8 * DAY))).toEqual({ type: 'noRecording', reason: 'notRecorded' });
+        // The closed doors explain more than the missing camera.
+        expect(publicMeetingPresentation({ ...notRecorded, closedToPublic: true }, signals(), at(2 * HOUR)))
+            .toEqual({ type: 'noRecording', reason: 'closedToPublic' });
     });
 });
 

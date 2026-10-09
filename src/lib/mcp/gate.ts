@@ -84,6 +84,7 @@ export async function requireVisibleMeeting(
             videoUrl: true,
             format: true,
             closedToPublic: true,
+            noRecording: true,
             administrativeBody: { select: { name: true, name_en: true } },
             administrativeBodyId: true,
             city: { select: { timezone: true } },

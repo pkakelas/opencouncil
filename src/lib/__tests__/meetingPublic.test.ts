@@ -13,6 +13,7 @@ const row = {
     scheduleStatusReason: null,
     format: 'inPerson' as const,
     closedToPublic: false,
+    noRecording: false,
     place: null,
     postponedFromId: 'mar12_2026',
     continuationOfId: 'mar5_2026',
@@ -59,5 +60,6 @@ describe('public meeting projections', () => {
         expect(publicRow({ ...row, ...media, closedToPublic: true }))
             .toMatchObject({ youtubeUrl: null, videoUrl: null, audioUrl: null, muxPlaybackId: null });
         expect(publicRow({ ...row, ...media, format: 'byCirculation' as const }).muxPlaybackId).toBeNull();
+        expect(publicRow({ ...row, ...media, noRecording: true }).muxPlaybackId).toBeNull();
     });
 });

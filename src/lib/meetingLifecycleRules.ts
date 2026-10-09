@@ -64,12 +64,15 @@ export class LifecycleRuleError extends Error {
 
 export const SCHEDULE_STATUS_REASON_MAX_LENGTH = 500;
 
+/** How long a pasted agenda may be. A long agenda of a council runs to a few thousand characters. */
+export const AGENDA_TEXT_MAX_LENGTH = 40_000;
+
 /**
  * The facts of the record that a write sets besides the links, in one list:
  * the meeting writes and the MCP tools read it, so a new fact reaches both.
  */
 export const MEETING_RECORD_INPUT_KEYS = [
-    'kind', 'sessionNumber', 'scheduleStatus', 'scheduleStatusReason', 'format', 'closedToPublic', 'place',
+    'kind', 'sessionNumber', 'scheduleStatus', 'scheduleStatusReason', 'format', 'closedToPublic', 'noRecording', 'place',
 ] as const satisfies ReadonlyArray<keyof CouncilMeeting>;
 
 export type MeetingRecordInput = Partial<Pick<CouncilMeeting, (typeof MEETING_RECORD_INPUT_KEYS)[number]>>;
@@ -138,14 +141,22 @@ export const TAKES_PLACE_WHERE = {
     scheduleStatus: { in: TAKES_PLACE_STATUSES },
 } satisfies Prisma.CouncilMeetingWhereInput;
 
-/** The meeting has a recording that the public can watch: no stream or transcript otherwise. */
-export function hasPublicRecording(meeting: { format: MeetingFormat; closedToPublic: boolean }): boolean {
-    return MEETING_FORMATS[meeting.format].publicRecording && !meeting.closedToPublic;
+/** The columns that say whether a meeting has a recording the public can watch. */
+export type RecordingFields = { format: MeetingFormat; closedToPublic: boolean; noRecording: boolean };
+
+/**
+ * The meeting has a recording that the public can watch: no stream or
+ * transcript otherwise. A meeting closed to the public or held by circulation
+ * has none, and neither has a meeting that the body marked as not recorded.
+ */
+export function hasPublicRecording(meeting: RecordingFields): boolean {
+    return MEETING_FORMATS[meeting.format].publicRecording && !meeting.closedToPublic && !meeting.noRecording;
 }
 
 /** `hasPublicRecording` as a database filter. */
 export const PUBLIC_RECORDING_WHERE = {
     closedToPublic: false,
+    noRecording: false,
     format: { in: keysWhere(MEETING_FORMATS, (format) => format.publicRecording) },
 } satisfies Prisma.CouncilMeetingWhereInput;
 
@@ -239,11 +250,13 @@ export function validateMeetingRecord(next: MeetingRecordState, ctx: LifecycleCo
 /**
  * Why a meeting takes no transcription, or null when it does. A postponed or
  * cancelled meeting did not take place on its date, and a meeting that is
- * closed to the public or held by circulation has no public recording.
+ * closed to the public, held by circulation or not recorded has no public
+ * recording.
  */
-export function transcriptionRefusal(meeting: Pick<CouncilMeeting, 'scheduleStatus' | 'closedToPublic' | 'format'>): string | null {
+export function transcriptionRefusal(meeting: Pick<CouncilMeeting, 'scheduleStatus' | 'closedToPublic' | 'noRecording' | 'format'>): string | null {
     if (!takesPlace(meeting)) return `Meeting is ${meeting.scheduleStatus}`;
     if (meeting.closedToPublic) return 'Meeting is closed to the public: it has no recording to transcribe';
+    if (meeting.noRecording) return 'Meeting was not recorded: it has no recording to transcribe';
     if (!hasPublicRecording(meeting)) return `Meeting is held as ${meeting.format}: it has no recording to transcribe`;
     return null;
 }

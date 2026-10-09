@@ -42,6 +42,8 @@ const meetingRecordInput = {
     format: z.enum(OFFERED_FORMATS).optional().describe('How the meeting takes place. Defaults to inPerson'),
     closedToPublic: z.boolean().optional()
         .describe('The council decided to meet behind closed doors: no stream and no transcription'),
+    noRecording: z.boolean().optional()
+        .describe('The body states that the meeting was not recorded: no video and no transcription, the agenda stays'),
     place: z.string().max(200).nullable().optional()
         .describe('Where the meeting takes place, when it is not the usual hall of the body'),
 } satisfies Record<(typeof MEETING_RECORD_INPUT_KEYS)[number], z.ZodType>;

@@ -73,6 +73,7 @@ The stages above describe the processing pipeline. The meeting record also holds
 * **Kind** (`kind`): `regular`, `urgent`, `accountability`, `annualReport`, `budget` or `presidencyElection`. Null means "unknown" and occurs on archive meetings only. A new meeting is `regular` by default. λογοδοσία, απολογισμός and a meeting by circulation belong to a council.
 * **Session number** (`sessionNumber`): the number that the municipality prints. It is not unique. A cancelled meeting keeps its number, and the new meeting after a postponement takes the same number. The platform never computes it.
 * **Format and place** (`format`, `closedToPublic`, `place`): `format` defaults to `inPerson`. A meeting without its own `place` shows the `place` of its administrative body.
+* **No recording** (`noRecording`): the body states that no recording of the meeting exists (#829). The page then promises no video and no transcript, and the pipelines skip the meeting, as for a meeting closed to the public. It differs from `closedToPublic`: the public was there, nobody filmed. A body that records only some of its meetings sets it in the meeting form.
 * **Links**: the new meeting after a postponement points to the postponed meeting (`postponedFromId`). A later part of a meeting points to its first part (`continuationOfId`). The continuation has its column and its checks only; the form and the page for it are a follow-up.
 
 ### The name
@@ -85,6 +86,12 @@ The stages above describe the processing pipeline. The meeting record also holds
 An override wins in both forms, as the admin wrote it. The kind words exist in Greek and English. The other locales name a meeting by their word for "meeting" and the date. The date is in the timezone of the city.
 
 The SQL function `council_meeting_display_name` builds the same title for the Notis view `notis_meeting_events`. Notis shows the body and the date from their own columns. A test compares the SQL function with `meetingDisplayName` for every kind, number and language. The Elasticsearch field `meeting_name` still reads the column, and no query reads that field.
+
+### The agenda as pasted text
+
+A body with no PDF of its agenda pastes the text into the meeting form (#829). The form sends `agendaText` in place of `agendaUrl`. After the response, `src/lib/agendaText.ts` asks the model for the items and saves them as the subjects of the meeting, with the same pruning rule as the processAgenda task. The extraction is lighter than the task: it names the items, their topic and who brings them, and pins no location. A failure is logged, and the admin pastes the text again.
+
+The saved agenda has the effects of the task. The extraction writes a succeeded `processAgenda` task row, with the pasted text in its request and the subjects in its response. The task list shows the row. A re-run replays the subjects from it. The Notis view `notis_meeting_events` reads the row as the agenda event of the meeting. The extraction then creates the before-meeting notifications of the body, as the task callback does, through `notifyMeetingSubjects` in `src/lib/notifications/meetingTask.ts`.
 
 ### The write path and the visibility rules
 

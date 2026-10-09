@@ -28,7 +28,7 @@ import InputWithDerivatives from "../InputWithDerivatives"
 import { LinkOrDrop } from "../ui/link-or-drop"
 import { YouTubePreview } from "./YouTubePreview"
 import { CouncilMeeting, MeetingFormat, MeetingKind, MeetingScheduleStatus } from '@prisma/client'
-import { COUNCIL_ONLY_FORMATS, COUNCIL_ONLY_KINDS, OFFERED_FORMATS, SCHEDULE_STATUS_REASON_MAX_LENGTH, takesPlace } from '@/lib/meetingLifecycleRules'
+import { AGENDA_TEXT_MAX_LENGTH, COUNCIL_ONLY_FORMATS, COUNCIL_ONLY_KINDS, OFFERED_FORMATS, SCHEDULE_STATUS_REASON_MAX_LENGTH, takesPlace } from '@/lib/meetingLifecycleRules'
 import { meetingLabel } from '@/lib/meetingName'
 import { DEFAULT_TIMEZONE } from '@/lib/formatters/time'
 import { Textarea } from '../ui/textarea'
@@ -74,8 +74,12 @@ const formSchema = z.object({
         .optional(),
     format: z.nativeEnum(MeetingFormat),
     closedToPublic: z.boolean(),
+    noRecording: z.boolean(),
     place: z.string().max(200).optional(),
     postponedFromId: z.string().optional(),
+    // The agenda comes as a link or a file, or as pasted text (#829).
+    agendaMode: z.enum(['link', 'text']),
+    agendaText: z.string().max(AGENDA_TEXT_MAX_LENGTH).optional(),
 })
 
 const KINDS = Object.values(MeetingKind)
@@ -138,10 +142,19 @@ export default function AddMeetingForm({ cityId, meeting, onSuccess, allowedBody
             sessionNumber: meeting?.sessionNumber?.toString() ?? "",
             format: meeting?.format ?? MeetingFormat.inPerson,
             closedToPublic: meeting?.closedToPublic ?? false,
+            noRecording: meeting?.noRecording ?? false,
             place: meeting?.place ?? "",
             postponedFromId: meeting?.postponedFromId ?? "none",
+            agendaMode: 'link',
+            agendaText: "",
         },
     })
+
+    // A body admin runs the form for their body (#829): the fields of the
+    // record sit behind "Details", and the fields of the city stay out.
+    const secretary = Boolean(allowedBodyIds)
+    const noRecording = form.watch('noRecording')
+    const agendaMode = form.watch('agendaMode')
 
     const selectedBody = administrativeBodies.find(body => body.id === form.watch('administrativeBodyId'))
     // A meeting with no body reads as the council's.
@@ -180,11 +193,14 @@ export default function AddMeetingForm({ cityId, meeting, onSuccess, allowedBody
     }, [cityId, allowedBodyIds])
 
     useEffect(() => {
+        // The picker of the postponed meeting is for an admin of the city; the
+        // editor list behind it answers 401 to an admin of a body alone.
+        if (secretary) return
         fetch(postponementCandidatesUrl(cityId, meetingDay ? new Date(meetingDay) : new Date()))
             .then(res => res.json())
             .then((data: PostponementCandidate[]) => setCityMeetings(Array.isArray(data) ? data : []))
             .catch(err => console.error('Failed to fetch meetings:', err));
-    }, [cityId, meetingDay])
+    }, [cityId, meetingDay, secretary])
 
     useEffect(() => {
         if (currentLink && !form.formState.dirtyFields.postponedFromId) {
@@ -202,6 +218,8 @@ export default function AddMeetingForm({ cityId, meeting, onSuccess, allowedBody
         const method = meeting ? 'PUT' : 'POST'
 
         try {
+            // The form's own switches stay in the browser.
+            const { agendaMode: _agendaMode, agendaText: _agendaText, ...requestValues } = values
             // Parse time and combine with date
             const [hours, minutes] = values.time.split(':').map(Number)
             const dateTime = new Date(values.date)
@@ -216,8 +234,14 @@ export default function AddMeetingForm({ cityId, meeting, onSuccess, allowedBody
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    ...values,
+                    ...requestValues,
                     meetingId: meetingIdForRequest(values.meetingId, Boolean(meeting)),
+                    // A meeting with no recording has no video, and a pasted
+                    // agenda takes the place of the link.
+                    youtubeUrl: values.noRecording ? '' : values.youtubeUrl,
+                    agendaUrl: values.agendaMode === 'text' ? '' : values.agendaUrl,
+                    agendaText: values.agendaMode === 'text' ? values.agendaText?.trim() || null : null,
+                    processAgenda: values.agendaMode === 'link' && values.processAgenda,
                     // "none" is a UI sentinel (Radix Select can't have an empty-string
                     // item) — it must not reach the API, where any truthy value is
                     // stored as a foreign key and "none" violates the FK constraint.
@@ -259,6 +283,488 @@ export default function AddMeetingForm({ cityId, meeting, onSuccess, allowedBody
         }
     }
 
+    // The fields, named once, so the two layouts below compose them without a second copy.
+    const bodyField = (
+        <FormField
+            control={form.control}
+            name="administrativeBodyId"
+            render={({ field: { value, onChange, ...field } }) => (
+                <FormItem>
+                    <FormLabel>{t('administrativeBody')}</FormLabel>
+                    <Select onValueChange={onChange} value={value?.toString() || "none"}>
+                        <FormControl>
+                            <SelectTrigger {...field}>
+                                <SelectValue placeholder={t('selectAdministrativeBody')} />
+                            </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                            {!allowedBodyIds && (
+                                <SelectItem value="none">
+                                    {t('noAdministrativeBody')}
+                                </SelectItem>
+                            )}
+                            {administrativeBodies.map((body) => (
+                                <SelectItem key={body.id} value={body.id}>
+                                    {body.name} ({t(`administrativeBodyType.${body.type}`)})
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                    <FormDescription>
+                        {t('administrativeBodyDescription')}
+                    </FormDescription>
+                    <FormMessage />
+                </FormItem>
+            )}
+        />
+    )
+
+    const kindField = (
+        <FormField
+            control={form.control}
+            name="kind"
+            render={({ field }) => (
+                <FormItem>
+                    <FormLabel>{t('kind')}</FormLabel>
+                    <Select onValueChange={value => field.onChange(value === UNKNOWN_KIND ? null : value)} value={field.value ?? UNKNOWN_KIND}>
+                        <FormControl>
+                            <SelectTrigger>
+                                <SelectValue />
+                            </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                            {meeting && meeting.kind === null && (
+                                <SelectItem value={UNKNOWN_KIND}>{t('kindUnknown')}</SelectItem>
+                            )}
+                            {KINDS.map(kind => (
+                                <SelectItem key={kind} value={kind} disabled={COUNCIL_ONLY.has(kind) && !isCouncil}>
+                                    {t(`kindOptions.${kind}`)}{COUNCIL_ONLY.has(kind) ? ` (${t('councilOnly')})` : ''}
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                    <FormDescription>{t('kindDescription')}</FormDescription>
+                    <FormMessage />
+                </FormItem>
+            )}
+        />
+    )
+
+    const statusField = (
+        <FormField
+            control={form.control}
+            name="scheduleStatus"
+            render={({ field }) => (
+                <FormItem>
+                    <FormLabel>{t('scheduleStatus')}</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                        <FormControl>
+                            <SelectTrigger>
+                                <SelectValue />
+                            </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                            {STATUSES.map(status => (
+                                <SelectItem key={status} value={status}>{t(`scheduleStatusOptions.${status}`)}</SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                    <FormDescription>{t('scheduleStatusDescription')}</FormDescription>
+                    <FormMessage />
+                </FormItem>
+            )}
+        />
+    )
+
+    const reasonField = (
+        !takesPlace({ scheduleStatus }) && (
+            <FormField
+                control={form.control}
+                name="scheduleStatusReason"
+                render={({ field }) => (
+                    <FormItem>
+                        <FormLabel>{t('scheduleStatusReason')}</FormLabel>
+                        <FormControl>
+                            <Textarea {...field} placeholder={t('scheduleStatusReasonPlaceholder')} maxLength={SCHEDULE_STATUS_REASON_MAX_LENGTH} />
+                        </FormControl>
+                        <FormMessage />
+                    </FormItem>
+                )}
+            />
+        )
+    )
+
+    const postponedField = (
+        <FormField
+            control={form.control}
+            name="postponedFromId"
+            render={({ field }) => (
+                <FormItem>
+                    <FormLabel>{t('postponedFrom')}</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value || "none"}>
+                        <FormControl>
+                            <SelectTrigger>
+                                <SelectValue />
+                            </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                            <SelectItem value="none">{t('postponedFromNone')}</SelectItem>
+                            {postponementCandidates.map(candidate => (
+                                <SelectItem key={candidate.id} value={candidate.id}>
+                                    {meetingLabel(candidate, 'el', DEFAULT_TIMEZONE)}
+                                </SelectItem>
+                            ))}
+                            {/* The current link stays selectable when its meeting is outside the window. */}
+                            {currentLink && !postponementCandidates.some(candidate => candidate.id === currentLink) && (
+                                <SelectItem value={currentLink}>{currentLink}</SelectItem>
+                            )}
+                        </SelectContent>
+                    </Select>
+                    <FormDescription>{t('postponedFromDescription')}</FormDescription>
+                    <FormMessage />
+                </FormItem>
+            )}
+        />
+    )
+
+    const dateField = (
+        <FormField
+            control={form.control}
+            name="date"
+            render={({ field }) => (
+                <FormItem className="flex flex-col mb-4">
+                    <FormLabel>{t('meetingDate')}</FormLabel>
+                    <Calendar
+                        mode="single"
+                        selected={field.value}
+                        onSelect={(date) => {
+                            if (date && date.getTime() !== field.value.getTime()) {
+                                field.onChange(date);
+                            }
+                        }}
+                        disabled={(date) =>
+                            date < new Date("2000-01-01")
+                        }
+                        autoFocus
+                        className="mb-2"
+                    />
+                    <FormDescription>
+                        {t('meetingDateDescription')}
+                    </FormDescription>
+                    <FormMessage />
+                </FormItem>
+            )}
+        />
+    )
+
+    const timeField = (
+        <FormField
+            control={form.control}
+            name="time"
+            render={({ field }) => (
+                <FormItem className="mb-6">
+                    <FormLabel>{t('meetingTime')}</FormLabel>
+                    <FormControl>
+                        <Input
+                            type="time"
+                            {...field}
+                            className="text-xl p-4 h-12 w-full max-w-xs"
+                        />
+                    </FormControl>
+                    <FormDescription>
+                        {t('meetingTimeDescription')}
+                    </FormDescription>
+                    <FormMessage />
+                </FormItem>
+            )}
+        />
+    )
+
+    const videoField = (
+        <FormField
+            control={form.control}
+            name="youtubeUrl"
+            render={({ field }) => {
+                const meetingId = form.watch('meetingId') || formatDateAsMeetingId(form.watch('date') ?? new Date())
+                const administrativeBodyId = uploadBodyId(form.watch('administrativeBodyId'))
+                return (
+                    <FormItem>
+                        <FormLabel>{t('meetingVideo')}</FormLabel>
+                        {!noRecording && (
+                            <>
+                                <FormControl>
+                                    <LinkOrDrop
+                                        {...field}
+                                        placeholder="https://... (YouTube, Vimeo, etc.)"
+                                        onUrlChange={(url) => field.onChange(url)}
+                                        config={meetingId ? {
+                                            cityId,
+                                            identifier: meetingId,
+                                            councilMeetingId: meeting?.id,
+                                            suffix: 'recording',
+                                            administrativeBodyId,
+                                        } : undefined}
+                                    />
+                                </FormControl>
+                                <YouTubePreview url={field.value || ""} />
+                                <FormDescription>
+                                    {t('meetingVideoDescription')}
+                                </FormDescription>
+                            </>
+                        )}
+                        <FormMessage />
+                    </FormItem>
+                )
+            }}
+        />
+    )
+
+    const agendaField = (
+        <FormField
+            control={form.control}
+            name="agendaUrl"
+            render={({ field }) => {
+                const meetingId = form.watch('meetingId') || formatDateAsMeetingId(form.watch('date') ?? new Date())
+                const administrativeBodyId = uploadBodyId(form.watch('administrativeBodyId'))
+                return (
+                    <FormItem>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                            <FormLabel>{t('meetingAgenda')}</FormLabel>
+                            <div className="flex gap-1" role="group" aria-label={t('meetingAgenda')}>
+                                <Button type="button" size="sm" variant={agendaMode === 'link' ? 'secondary' : 'ghost'} onClick={() => form.setValue('agendaMode', 'link')}>
+                                    {t('agendaAsLink')}
+                                </Button>
+                                <Button type="button" size="sm" variant={agendaMode === 'text' ? 'secondary' : 'ghost'} onClick={() => form.setValue('agendaMode', 'text')}>
+                                    {t('agendaAsText')}
+                                </Button>
+                            </div>
+                        </div>
+                        {agendaMode === 'link' ? (
+                            <>
+                                <FormControl>
+                                    <LinkOrDrop
+                                        {...field}
+                                        placeholder={t('meetingAgendaPlaceholder') || "https://... or drop a PDF file"}
+                                        onUrlChange={(url) => field.onChange(url)}
+                                        config={meetingId ? {
+                                            cityId,
+                                            identifier: meetingId,
+                                            councilMeetingId: meeting?.id,
+                                            suffix: 'agenda',
+                                            administrativeBodyId,
+                                        } : undefined}
+                                    />
+                                </FormControl>
+                                <FormDescription>
+                                    {t('meetingAgendaDescription')}
+                                </FormDescription>
+                            </>
+                        ) : (
+                            <>
+                                <Textarea
+                                    value={form.watch('agendaText') ?? ''}
+                                    onChange={event => form.setValue('agendaText', event.target.value)}
+                                    placeholder={t('agendaTextPlaceholder')}
+                                    maxLength={AGENDA_TEXT_MAX_LENGTH}
+                                    rows={10}
+                                />
+                                <FormDescription>
+                                    {t('agendaTextDescription')}
+                                </FormDescription>
+                            </>
+                        )}
+                        <FormMessage />
+                    </FormItem>
+                )
+            }}
+        />
+    )
+
+    const processAgendaField = (
+        !meeting && agendaMode === 'link' && (
+            <FormField
+                control={form.control}
+                name="processAgenda"
+                render={({ field }) => {
+                    const agendaUrl = form.watch('agendaUrl')
+                    const hasAgenda = !!agendaUrl && agendaUrl.length > 0
+                    return (
+                        <FormItem className="flex flex-row items-start space-x-3 space-y-0">
+                            <FormControl>
+                                <Checkbox
+                                    checked={field.value && hasAgenda}
+                                    onCheckedChange={field.onChange}
+                                    disabled={!hasAgenda}
+                                />
+                            </FormControl>
+                            <div className="space-y-1 leading-none">
+                                <FormLabel className={!hasAgenda ? "text-muted-foreground" : ""}>
+                                    {t('processAgenda')}
+                                </FormLabel>
+                                <FormDescription>
+                                    {t('processAgendaDescription')}
+                                </FormDescription>
+                            </div>
+                        </FormItem>
+                    )
+                }}
+            />
+        )
+    )
+
+    const sessionField = (
+        <FormField
+            control={form.control}
+            name="sessionNumber"
+            render={({ field }) => (
+                <FormItem>
+                    <FormLabel>{t('sessionNumber')}</FormLabel>
+                    <FormControl>
+                        <Input {...field} inputMode="numeric" className="max-w-[8rem]" />
+                    </FormControl>
+                    <FormDescription>{t('sessionNumberDescription')}</FormDescription>
+                    <FormMessage />
+                </FormItem>
+            )}
+        />
+    )
+
+    const formatField = (
+        <FormField
+            control={form.control}
+            name="format"
+            render={({ field }) => (
+                <FormItem>
+                    <FormLabel>{t('format')}</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                        <FormControl>
+                            <SelectTrigger>
+                                <SelectValue />
+                            </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                            {/* A format that the form does not offer stays selectable on a meeting that already has it. */}
+                            {(meeting && !OFFERED_FORMATS.includes(meeting.format) ? [...OFFERED_FORMATS, meeting.format] : OFFERED_FORMATS).map(format => (
+                                <SelectItem key={format} value={format} disabled={COUNCIL_ONLY.has(format) && !isCouncil}>
+                                    {t(`formatOptions.${format}`)}{COUNCIL_ONLY.has(format) ? ` (${t('councilOnly')})` : ''}
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                    <FormMessage />
+                </FormItem>
+            )}
+        />
+    )
+
+    const placeField = (
+        <FormField
+            control={form.control}
+            name="place"
+            render={({ field }) => (
+                <FormItem>
+                    <FormLabel>{t('place')}</FormLabel>
+                    <FormControl>
+                        <Input {...field} placeholder={selectedBody?.place ?? ''} />
+                    </FormControl>
+                    <FormDescription>{t('placeDescription')}</FormDescription>
+                    <FormMessage />
+                </FormItem>
+            )}
+        />
+    )
+
+    const closedField = (
+        <FormField
+            control={form.control}
+            name="closedToPublic"
+            render={({ field }) => (
+                <FormItem className="flex flex-row items-start space-x-3 space-y-0">
+                    <FormControl>
+                        <Checkbox checked={field.value} onCheckedChange={field.onChange} />
+                    </FormControl>
+                    <div className="space-y-1 leading-none">
+                        <FormLabel>{t('closedToPublic')}</FormLabel>
+                        <FormDescription>{t('closedToPublicDescription')}</FormDescription>
+                    </div>
+                </FormItem>
+            )}
+        />
+    )
+
+    const cityDetailsField = (
+        <Collapsible open={isDetailsOpen} onOpenChange={setIsDetailsOpen}>
+            <CollapsibleTrigger asChild>
+                <Button variant="ghost" className="flex w-full justify-between p-0">
+                    {t('details')}
+                    {isDetailsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                </Button>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="space-y-8">
+                <div className="space-y-2">
+                    <InputWithDerivatives
+                        baseName="name"
+                        basePlaceholder={t('meetingNamePlaceholder')}
+                        baseDescription={t('nameOverrideDescription')}
+                        derivatives={[
+                            {
+                                name: 'name_en',
+                                calculate: (baseValue) => toGreeklish(baseValue),
+                                placeholder: t('meetingNameEnPlaceholder'),
+                                description: t('meetingNameEnDescription'),
+                            },
+                        ]}
+                        form={form}
+                    />
+                </div>
+                <FormField
+                    control={form.control}
+                    name="meetingId"
+                    render={({ field }) => (
+                        <FormItem>
+                            <FormLabel>{t('meetingId')}</FormLabel>
+                            <FormControl>
+                                <Input
+                                    {...field}
+                                    disabled={Boolean(meeting)}
+                                    placeholder={formatDateAsMeetingId(form.watch('date') ?? new Date())}
+                                />
+                            </FormControl>
+                            <FormDescription>
+                                {t('meetingIdDescription')}
+                            </FormDescription>
+                            <FormMessage />
+                        </FormItem>
+                    )}
+                />
+            </CollapsibleContent>
+        </Collapsible>
+    )
+
+    const noRecordingField = (
+        <FormField
+            control={form.control}
+            name="noRecording"
+            render={({ field }) => (
+                <FormItem className="flex flex-row items-start space-x-3 space-y-0">
+                    <FormControl>
+                        <Checkbox
+                            checked={field.value}
+                            onCheckedChange={(checked) => {
+                                field.onChange(checked === true)
+                                if (checked === true) form.setValue('youtubeUrl', '')
+                            }}
+                        />
+                    </FormControl>
+                    <div className="space-y-1 leading-none">
+                        <FormLabel>{t('noRecording')}</FormLabel>
+                        <FormDescription>{t('noRecordingDescription')}</FormDescription>
+                    </div>
+                </FormItem>
+            )}
+        />
+    )
+
     return (
         <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8 h-full">
@@ -282,388 +788,53 @@ export default function AddMeetingForm({ cityId, meeting, onSuccess, allowedBody
                     </div>
                 )}
                 <div className="space-y-8">
-                    <FormField
-                        control={form.control}
-                        name="administrativeBodyId"
-                        render={({ field: { value, onChange, ...field } }) => (
-                            <FormItem>
-                                <FormLabel>{t('administrativeBody')}</FormLabel>
-                                <Select onValueChange={onChange} value={value?.toString() || "none"}>
-                                    <FormControl>
-                                        <SelectTrigger {...field}>
-                                            <SelectValue placeholder={t('selectAdministrativeBody')} />
-                                        </SelectTrigger>
-                                    </FormControl>
-                                    <SelectContent>
-                                        {!allowedBodyIds && (
-                                            <SelectItem value="none">
-                                                {t('noAdministrativeBody')}
-                                            </SelectItem>
-                                        )}
-                                        {administrativeBodies.map((body) => (
-                                            <SelectItem key={body.id} value={body.id}>
-                                                {body.name} ({t(`administrativeBodyType.${body.type}`)})
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                                <FormDescription>
-                                    {t('administrativeBodyDescription')}
-                                </FormDescription>
-                                <FormMessage />
-                            </FormItem>
-                        )}
-                    />
-                    <FormField
-                        control={form.control}
-                        name="kind"
-                        render={({ field }) => (
-                            <FormItem>
-                                <FormLabel>{t('kind')}</FormLabel>
-                                <Select onValueChange={value => field.onChange(value === UNKNOWN_KIND ? null : value)} value={field.value ?? UNKNOWN_KIND}>
-                                    <FormControl>
-                                        <SelectTrigger>
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                    </FormControl>
-                                    <SelectContent>
-                                        {meeting && meeting.kind === null && (
-                                            <SelectItem value={UNKNOWN_KIND}>{t('kindUnknown')}</SelectItem>
-                                        )}
-                                        {KINDS.map(kind => (
-                                            <SelectItem key={kind} value={kind} disabled={COUNCIL_ONLY.has(kind) && !isCouncil}>
-                                                {t(`kindOptions.${kind}`)}{COUNCIL_ONLY.has(kind) ? ` (${t('councilOnly')})` : ''}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                                <FormDescription>{t('kindDescription')}</FormDescription>
-                                <FormMessage />
-                            </FormItem>
-                        )}
-                    />
-                    <FormField
-                        control={form.control}
-                        name="scheduleStatus"
-                        render={({ field }) => (
-                            <FormItem>
-                                <FormLabel>{t('scheduleStatus')}</FormLabel>
-                                <Select onValueChange={field.onChange} value={field.value}>
-                                    <FormControl>
-                                        <SelectTrigger>
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                    </FormControl>
-                                    <SelectContent>
-                                        {STATUSES.map(status => (
-                                            <SelectItem key={status} value={status}>{t(`scheduleStatusOptions.${status}`)}</SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                                <FormDescription>{t('scheduleStatusDescription')}</FormDescription>
-                                <FormMessage />
-                            </FormItem>
-                        )}
-                    />
-                    {!takesPlace({ scheduleStatus }) && (
-                        <FormField
-                            control={form.control}
-                            name="scheduleStatusReason"
-                            render={({ field }) => (
-                                <FormItem>
-                                    <FormLabel>{t('scheduleStatusReason')}</FormLabel>
-                                    <FormControl>
-                                        <Textarea {...field} placeholder={t('scheduleStatusReasonPlaceholder')} maxLength={SCHEDULE_STATUS_REASON_MAX_LENGTH} />
-                                    </FormControl>
-                                    <FormMessage />
-                                </FormItem>
-                            )}
-                        />
+                    {secretary ? (
+                        <>
+                            {administrativeBodies.length > 1 && bodyField}
+                            {dateField}
+                            {timeField}
+                            {videoField}
+                            {noRecordingField}
+                            {agendaField}
+                            {processAgendaField}
+                            <Collapsible open={isDetailsOpen} onOpenChange={setIsDetailsOpen}>
+                                <CollapsibleTrigger asChild>
+                                    <Button variant="ghost" className="flex w-full justify-between p-0">
+                                        {t('details')}
+                                        {isDetailsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                                    </Button>
+                                </CollapsibleTrigger>
+                                <CollapsibleContent className="space-y-8">
+                                    {kindField}
+                                    {sessionField}
+                                    {statusField}
+                                    {reasonField}
+                                    {formatField}
+                                    {placeField}
+                                    {closedField}
+                                </CollapsibleContent>
+                            </Collapsible>
+                        </>
+                    ) : (
+                        <>
+                            {bodyField}
+                            {kindField}
+                            {statusField}
+                            {reasonField}
+                            {postponedField}
+                            {dateField}
+                            {timeField}
+                            {videoField}
+                            {noRecordingField}
+                            {agendaField}
+                            {processAgendaField}
+                            {sessionField}
+                            {formatField}
+                            {placeField}
+                            {closedField}
+                            {cityDetailsField}
+                        </>
                     )}
-                    <FormField
-                        control={form.control}
-                        name="postponedFromId"
-                        render={({ field }) => (
-                            <FormItem>
-                                <FormLabel>{t('postponedFrom')}</FormLabel>
-                                <Select onValueChange={field.onChange} value={field.value || "none"}>
-                                    <FormControl>
-                                        <SelectTrigger>
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                    </FormControl>
-                                    <SelectContent>
-                                        <SelectItem value="none">{t('postponedFromNone')}</SelectItem>
-                                        {postponementCandidates.map(candidate => (
-                                            <SelectItem key={candidate.id} value={candidate.id}>
-                                                {meetingLabel(candidate, 'el', DEFAULT_TIMEZONE)}
-                                            </SelectItem>
-                                        ))}
-                                        {/* The current link stays selectable when its meeting is outside the window. */}
-                                        {currentLink && !postponementCandidates.some(candidate => candidate.id === currentLink) && (
-                                            <SelectItem value={currentLink}>{currentLink}</SelectItem>
-                                        )}
-                                    </SelectContent>
-                                </Select>
-                                <FormDescription>{t('postponedFromDescription')}</FormDescription>
-                                <FormMessage />
-                            </FormItem>
-                        )}
-                    />
-                    <FormField
-                        control={form.control}
-                        name="date"
-                        render={({ field }) => (
-                            <FormItem className="flex flex-col mb-4">
-                                <FormLabel>{t('meetingDate')}</FormLabel>
-                                <Calendar
-                                    mode="single"
-                                    selected={field.value}
-                                    onSelect={(date) => {
-                                        if (date && date.getTime() !== field.value.getTime()) {
-                                            field.onChange(date);
-                                        }
-                                    }}
-                                    disabled={(date) =>
-                                        date < new Date("2000-01-01")
-                                    }
-                                    autoFocus
-                                    className="mb-2"
-                                />
-                                <FormDescription>
-                                    {t('meetingDateDescription')}
-                                </FormDescription>
-                                <FormMessage />
-                            </FormItem>
-                        )}
-                    />
-
-                    <FormField
-                        control={form.control}
-                        name="time"
-                        render={({ field }) => (
-                            <FormItem className="mb-6">
-                                <FormLabel>{t('meetingTime')}</FormLabel>
-                                <FormControl>
-                                    <Input
-                                        type="time"
-                                        {...field}
-                                        className="text-xl p-4 h-12 w-full max-w-xs"
-                                    />
-                                </FormControl>
-                                <FormDescription>
-                                    {t('meetingTimeDescription')}
-                                </FormDescription>
-                                <FormMessage />
-                            </FormItem>
-                        )}
-                    />
-                    <FormField
-                        control={form.control}
-                        name="youtubeUrl"
-                        render={({ field }) => {
-                            const meetingId = form.watch('meetingId') || formatDateAsMeetingId(form.watch('date') ?? new Date())
-                            const administrativeBodyId = uploadBodyId(form.watch('administrativeBodyId'))
-                            return (
-                                <FormItem>
-                                    <FormLabel>{t('meetingVideo')}</FormLabel>
-                                    <FormControl>
-                                        <LinkOrDrop
-                                            {...field}
-                                            placeholder="https://... (YouTube, Vimeo, etc.)"
-                                            onUrlChange={(url) => field.onChange(url)}
-                                            config={meetingId ? {
-                                                cityId,
-                                                identifier: meetingId,
-                                                councilMeetingId: meeting?.id,
-                                                suffix: 'recording',
-                                                administrativeBodyId,
-                                            } : undefined}
-                                        />
-                                    </FormControl>
-                                    <YouTubePreview url={field.value || ""} />
-                                    <FormDescription>
-                                        {t('meetingVideoDescription')}
-                                    </FormDescription>
-                                    <FormMessage />
-                                </FormItem>
-                            )
-                        }}
-                    />
-                    <FormField
-                        control={form.control}
-                        name="agendaUrl"
-                        render={({ field }) => {
-                            const meetingId = form.watch('meetingId') || formatDateAsMeetingId(form.watch('date') ?? new Date())
-                            const administrativeBodyId = uploadBodyId(form.watch('administrativeBodyId'))
-                            return (
-                                <FormItem>
-                                    <FormLabel>{t('meetingAgenda')}</FormLabel>
-                                    <FormControl>
-                                        <LinkOrDrop
-                                            {...field}
-                                            placeholder={t('meetingAgendaPlaceholder') || "https://... or drop a PDF file"}
-                                            onUrlChange={(url) => field.onChange(url)}
-                                            config={meetingId ? {
-                                                cityId,
-                                                identifier: meetingId,
-                                                councilMeetingId: meeting?.id,
-                                                suffix: 'agenda',
-                                                administrativeBodyId,
-                                            } : undefined}
-                                        />
-                                    </FormControl>
-                                    <FormDescription>
-                                        {t('meetingAgendaDescription')}
-                                    </FormDescription>
-                                    <FormMessage />
-                                </FormItem>
-                            )
-                        }}
-                    />
-                    {!meeting && (
-                        <FormField
-                            control={form.control}
-                            name="processAgenda"
-                            render={({ field }) => {
-                                const agendaUrl = form.watch('agendaUrl')
-                                const hasAgenda = !!agendaUrl && agendaUrl.length > 0
-                                return (
-                                    <FormItem className="flex flex-row items-start space-x-3 space-y-0">
-                                        <FormControl>
-                                            <Checkbox
-                                                checked={field.value && hasAgenda}
-                                                onCheckedChange={field.onChange}
-                                                disabled={!hasAgenda}
-                                            />
-                                        </FormControl>
-                                        <div className="space-y-1 leading-none">
-                                            <FormLabel className={!hasAgenda ? "text-muted-foreground" : ""}>
-                                                {t('processAgenda')}
-                                            </FormLabel>
-                                            <FormDescription>
-                                                {t('processAgendaDescription')}
-                                            </FormDescription>
-                                        </div>
-                                    </FormItem>
-                                )
-                            }}
-                        />
-                    )}
-                    <FormField
-                        control={form.control}
-                        name="sessionNumber"
-                        render={({ field }) => (
-                            <FormItem>
-                                <FormLabel>{t('sessionNumber')}</FormLabel>
-                                <FormControl>
-                                    <Input {...field} inputMode="numeric" className="max-w-[8rem]" />
-                                </FormControl>
-                                <FormDescription>{t('sessionNumberDescription')}</FormDescription>
-                                <FormMessage />
-                            </FormItem>
-                        )}
-                    />
-                    <FormField
-                        control={form.control}
-                        name="format"
-                        render={({ field }) => (
-                            <FormItem>
-                                <FormLabel>{t('format')}</FormLabel>
-                                <Select onValueChange={field.onChange} value={field.value}>
-                                    <FormControl>
-                                        <SelectTrigger>
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                    </FormControl>
-                                    <SelectContent>
-                                        {/* A format that the form does not offer stays selectable on a meeting that already has it. */}
-                                        {(meeting && !OFFERED_FORMATS.includes(meeting.format) ? [...OFFERED_FORMATS, meeting.format] : OFFERED_FORMATS).map(format => (
-                                            <SelectItem key={format} value={format} disabled={COUNCIL_ONLY.has(format) && !isCouncil}>
-                                                {t(`formatOptions.${format}`)}{COUNCIL_ONLY.has(format) ? ` (${t('councilOnly')})` : ''}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                                <FormMessage />
-                            </FormItem>
-                        )}
-                    />
-                    <FormField
-                        control={form.control}
-                        name="place"
-                        render={({ field }) => (
-                            <FormItem>
-                                <FormLabel>{t('place')}</FormLabel>
-                                <FormControl>
-                                    <Input {...field} placeholder={selectedBody?.place ?? ''} />
-                                </FormControl>
-                                <FormDescription>{t('placeDescription')}</FormDescription>
-                                <FormMessage />
-                            </FormItem>
-                        )}
-                    />
-                    <FormField
-                        control={form.control}
-                        name="closedToPublic"
-                        render={({ field }) => (
-                            <FormItem className="flex flex-row items-start space-x-3 space-y-0">
-                                <FormControl>
-                                    <Checkbox checked={field.value} onCheckedChange={field.onChange} />
-                                </FormControl>
-                                <div className="space-y-1 leading-none">
-                                    <FormLabel>{t('closedToPublic')}</FormLabel>
-                                    <FormDescription>{t('closedToPublicDescription')}</FormDescription>
-                                </div>
-                            </FormItem>
-                        )}
-                    />
-                    <Collapsible open={isDetailsOpen} onOpenChange={setIsDetailsOpen}>
-                        <CollapsibleTrigger asChild>
-                            <Button variant="ghost" className="flex w-full justify-between p-0">
-                                {t('details')}
-                                {isDetailsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                            </Button>
-                        </CollapsibleTrigger>
-                        <CollapsibleContent className="space-y-8">
-                            <div className="space-y-2">
-                                <InputWithDerivatives
-                                    baseName="name"
-                                    basePlaceholder={t('meetingNamePlaceholder')}
-                                    baseDescription={t('nameOverrideDescription')}
-                                    derivatives={[
-                                        {
-                                            name: 'name_en',
-                                            calculate: (baseValue) => toGreeklish(baseValue),
-                                            placeholder: t('meetingNameEnPlaceholder'),
-                                            description: t('meetingNameEnDescription'),
-                                        },
-                                    ]}
-                                    form={form}
-                                />
-                            </div>
-                            <FormField
-                                control={form.control}
-                                name="meetingId"
-                                render={({ field }) => (
-                                    <FormItem>
-                                        <FormLabel>{t('meetingId')}</FormLabel>
-                                        <FormControl>
-                                            <Input
-                                                {...field}
-                                                disabled={Boolean(meeting)}
-                                                placeholder={formatDateAsMeetingId(form.watch('date') ?? new Date())}
-                                            />
-                                        </FormControl>
-                                        <FormDescription>
-                                            {t('meetingIdDescription')}
-                                        </FormDescription>
-                                        <FormMessage />
-                                    </FormItem>
-                                )}
-                            />
-                        </CollapsibleContent>
-                    </Collapsible>
                 </div>
                 <div className="flex justify-between sticky bottom-0 py-4 bg-background border-t">
                     <Button type="submit" disabled={isSubmitting}>

@@ -15,6 +15,8 @@ import { requestProcessAgendaInternal } from '@/lib/tasks/processAgendaInternal'
 import { revalidateAfterResponse } from '@/lib/cache/afterResponse';
 import { meetingLabel } from '@/lib/meetingName';
 import { pickRecordInput, takesPlace, type MeetingRecordInput } from '@/lib/meetingLifecycleRules';
+import { after } from 'next/server';
+import { processAgendaText } from '@/lib/agendaText';
 import { isBodyOfCity } from '@/lib/db/administrativeBodies';
 import { isSecondaryBody } from '@/lib/utils/bodyTier';
 import { BadRequestError } from '@/lib/api/errors';
@@ -41,9 +43,22 @@ export type NewMeetingInput = {
     administrativeBodyId?: string | null;
     /** Queue the processAgenda task when there is an agenda URL. */
     processAgenda?: boolean;
+    /** The agenda as pasted text, when there is no agenda URL (lib/agendaText.ts). */
+    agendaText?: string | null;
 } & MeetingRecordInput & Partial<Pick<MeetingRecordFields, 'postponedFromId' | 'continuationOfId'>>;
 
-export type ProcessAgendaOutcome = string | 'failed' | 'skipped_no_agenda';
+export type ProcessAgendaOutcome = string | 'failed' | 'skipped_no_agenda' | 'from_text';
+
+/**
+ * Extract the subjects of a pasted agenda after the response: the model
+ * takes a while, and the admin waits for none of it. A failure is logged;
+ * the admin sees a meeting without subjects and pastes the text again.
+ */
+function extractAgendaTextAfterResponse(cityId: string, meetingId: string, text: string): void {
+    after(() => processAgendaText(cityId, meetingId, text).catch((error: unknown) => {
+        console.error(`Failed to extract the pasted agenda of ${cityId}/${meetingId}:`, error);
+    }));
+}
 
 /**
  * Create an unreleased meeting and run everything a new meeting needs: cache
@@ -54,7 +69,7 @@ export async function createMeetingWithEffects(
     cityId: string,
     input: NewMeetingInput
 ): Promise<{ meeting: CouncilMeetingWithAdminBody; processAgendaStatus?: ProcessAgendaOutcome }> {
-    const { name, name_en, date, youtubeUrl, agendaUrl, administrativeBodyId, processAgenda, postponedFromId, continuationOfId } = input;
+    const { name, name_en, date, youtubeUrl, agendaUrl, administrativeBodyId, processAgenda, postponedFromId, continuationOfId, agendaText } = input;
     const record = pickRecordInput(input);
     await requireBodyOfCity(cityId, administrativeBodyId);
 
@@ -120,6 +135,12 @@ export async function createMeetingWithEffects(
     // Runs outside the city check above, because the sync loads the city itself.
     if (!secondary) await syncMeetingToCalendar(cityId, meetingId, { allowCreate: true });
 
+    // A pasted agenda takes the place of the PDF when there is no URL.
+    if (!agendaUrl && agendaText) {
+        extractAgendaTextAfterResponse(cityId, meetingId, agendaText);
+        return { meeting, processAgendaStatus: 'from_text' };
+    }
+
     if (!processAgenda) return { meeting };
     if (!agendaUrl) return { meeting, processAgendaStatus: 'skipped_no_agenda' };
 
@@ -133,7 +154,10 @@ export async function createMeetingWithEffects(
     }
 }
 
-export type MeetingDetailsEdit = Partial<MeetingRecordFields>;
+export type MeetingDetailsEdit = Partial<MeetingRecordFields> & {
+    /** The agenda as pasted text: its items replace the subjects of the meeting (lib/agendaText.ts). */
+    agendaText?: string | null;
+};
 
 /**
  * Edit the details of a meeting through the lifecycle rules, then invalidate
@@ -142,11 +166,12 @@ export type MeetingDetailsEdit = Partial<MeetingRecordFields>;
 export async function updateMeetingWithEffects(
     cityId: string,
     meetingId: string,
-    data: MeetingDetailsEdit
+    { agendaText, ...data }: MeetingDetailsEdit
 ): Promise<CouncilMeetingWithAdminBody> {
     await requireBodyOfCity(cityId, data.administrativeBodyId);
     const before = await getCouncilMeetingDirect(cityId, meetingId);
     const meeting = await updateMeetingRecord(cityId, meetingId, data);
+    if (agendaText) extractAgendaTextAfterResponse(cityId, meetingId, agendaText);
 
     // The landing lists the upcoming meetings that take place, so a change of
     // status, date or body can move a meeting in or out of that list. A public

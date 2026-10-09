@@ -23,6 +23,7 @@ export interface MeetingFormLifecycleValues {
     sessionNumber?: string;
     format: MeetingFormat;
     closedToPublic: boolean;
+    noRecording: boolean;
     place?: string;
     /** `none` is the Select's sentinel for "not the new meeting of a postponement". */
     postponedFromId?: string;
@@ -47,6 +48,7 @@ export function meetingRequestFields(values: MeetingFormLifecycleValues, { linkC
         sessionNumber: number ? Number(number) : null,
         format: values.format,
         closedToPublic: values.closedToPublic,
+        noRecording: values.noRecording,
         place: text(values.place),
         postponedFromId: !linkChanged
             ? undefined

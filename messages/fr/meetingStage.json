@@ -32,7 +32,8 @@
         "cancelled": "La séance du {date} a été annulée et n’a pas eu lieu. L’ordre du jour reste ici pour référence.",
         "reason": "Motif : {reason}",
         "closedToPublic": "La séance s’est tenue à huis clos, sans diffusion publique. L’ordre du jour et les décisions sont disponibles.",
-        "byCirculation": "La séance s’est tenue par consultation écrite. Il n’y a ni vidéo ni transcription ; l’ordre du jour et les décisions sont disponibles."
+        "byCirculation": "La séance s’est tenue par consultation écrite. Il n’y a ni vidéo ni transcription ; l’ordre du jour et les décisions sont disponibles.",
+        "notRecorded": "La séance s’est tenue sans enregistrement. Il n’y a ni vidéo ni transcription ; l’ordre du jour est disponible."
     },
     "actions": {
         "channel": "Chaîne YouTube",

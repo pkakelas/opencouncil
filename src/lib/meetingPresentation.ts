@@ -1,6 +1,6 @@
-import type { MeetingFormat, MeetingScheduleStatus, Realm } from '@prisma/client';
+import type { MeetingScheduleStatus, Realm } from '@prisma/client';
 import { hasExplainPage } from '@/lib/explain/availability';
-import { hasPublicRecording } from '@/lib/meetingLifecycleRules';
+import { hasPublicRecording, type RecordingFields } from '@/lib/meetingLifecycleRules';
 import {
     msUntilStageChange,
     pendingKind,
@@ -14,21 +14,19 @@ import {
  * What a reader sees for a meeting: its stage (lib/meetingStage.ts), or a
  * fact that replaces the stage. A postponed or cancelled meeting shows that at
  * every age, so it never reads as waiting or as held without material. A
- * meeting that was held with no recording (closed to the public, or by
- * circulation) never promises a video or a transcript.
+ * meeting that was held with no recording (closed to the public, by
+ * circulation, or not recorded) never promises a video or a transcript.
  */
 export type PublicMeetingPresentation =
     | { type: 'postponed'; reason: string | null }
     | { type: 'cancelled'; reason: string | null }
-    | { type: 'noRecording'; reason: 'byCirculation' | 'closedToPublic' }
+    | { type: 'noRecording'; reason: 'byCirculation' | 'closedToPublic' | 'notRecorded' }
     | { type: 'stage'; stage: PublicMeetingStage };
 
 /** The meeting columns that the presentation reads besides the stage signals. */
-export interface MeetingPresentationFields {
+export interface MeetingPresentationFields extends RecordingFields {
     scheduleStatus: MeetingScheduleStatus;
     scheduleStatusReason: string | null;
-    format: MeetingFormat;
-    closedToPublic: boolean;
 }
 
 export function publicMeetingPresentation(
@@ -50,9 +48,16 @@ export function publicMeetingPresentation(
     // A meeting that has not started reads as upcoming; the strip offers it no
     // channel. Once it starts, it never promises a video or a transcript.
     if (!hasPublicRecording(fields) && stage !== 'upcoming') {
-        return { type: 'noRecording', reason: fields.closedToPublic ? 'closedToPublic' : 'byCirculation' };
+        return { type: 'noRecording', reason: noRecordingReason(fields) };
     }
     return { type: 'stage', stage };
+}
+
+/** Which fact withholds the recording. The closed doors come first: they explain the most. */
+function noRecordingReason(fields: RecordingFields): 'byCirculation' | 'closedToPublic' | 'notRecorded' {
+    if (fields.closedToPublic) return 'closedToPublic';
+    if (fields.noRecording) return 'notRecorded';
+    return 'byCirculation';
 }
 
 /**

@@ -1,5 +1,5 @@
 import type { MeetingFormat, MeetingKind, MeetingScheduleStatus } from '@prisma/client';
-import { MEETING_FORMATS, hasPublicRecording } from '@/lib/meetingLifecycleRules';
+import { MEETING_FORMATS, hasPublicRecording, type RecordingFields } from '@/lib/meetingLifecycleRules';
 import { meetingDisplayName, meetingLabel, type MeetingNameFields } from '@/lib/meetingName';
 
 /**
@@ -24,8 +24,8 @@ export function effectivePlace(
 type MediaFields = { youtubeUrl: string | null; videoUrl: string | null; audioUrl: string | null; muxPlaybackId: string | null };
 
 /**
- * A meeting with no public recording (closed to the public, or by
- * circulation) as a reader receives it: no media to play. An editor of the
+ * A meeting with no public recording (closed to the public, by circulation,
+ * or not recorded) as a reader receives it: no media to play. An editor of the
  * city still receives the media.
  */
 export function withoutMedia<T extends MediaFields>(row: T): T {
@@ -41,18 +41,16 @@ export function hideLinks<T extends { postponedFromId: string | null; continuati
  * A row of a public list: no link to another meeting, and no media of a
  * meeting that has no public recording.
  */
-export function publicRow<T extends { postponedFromId: string | null; continuationOfId: string | null; format: MeetingFormat; closedToPublic: boolean } & MediaFields>(row: T): T {
+export function publicRow<T extends { postponedFromId: string | null; continuationOfId: string | null } & RecordingFields & MediaFields>(row: T): T {
     const linked = hideLinks(row);
     return hasPublicRecording(row) ? linked : withoutMedia(linked);
 }
 
-type RecordSource = {
+type RecordSource = RecordingFields & {
     scheduleStatus: MeetingScheduleStatus;
     scheduleStatusReason: string | null;
     kind: MeetingKind | null;
     sessionNumber: number | null;
-    format: MeetingFormat;
-    closedToPublic: boolean;
     place: string | null;
     administrativeBody?: { place?: string | null } | null;
 };
@@ -70,6 +68,7 @@ export function publicRecordFields(meeting: RecordSource, postponedFromDate: Dat
         sessionNumber: meeting.sessionNumber,
         format: meeting.format,
         closedToPublic: meeting.closedToPublic,
+        noRecording: meeting.noRecording,
         place: effectivePlace(meeting),
         postponedFromDate: postponedFromDate?.toISOString() ?? null,
     };
