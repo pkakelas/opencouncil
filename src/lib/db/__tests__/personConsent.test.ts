@@ -6,6 +6,7 @@ const txFindFirst = jest.fn();
 const txCreate = jest.fn();
 const txUpdate = jest.fn();
 const txAdministers = jest.fn();
+const mockPersonFindUnique = jest.fn();
 jest.mock('@/lib/db/prisma', () => ({
     __esModule: true,
     default: {
@@ -13,6 +14,7 @@ jest.mock('@/lib/db/prisma', () => ({
             findMany: (...args: unknown[]) => mockFindMany(...args),
             findFirst: (...args: unknown[]) => mockFindFirst(...args),
         },
+        person: { findUnique: (...args: unknown[]) => mockPersonFindUnique(...args) },
         $transaction: (...args: unknown[]) => mockTransaction(...args),
     },
 }));
@@ -153,6 +155,26 @@ describe('setVoicePrintConsent', () => {
 });
 
 describe('recordVoicePrintConsent', () => {
+    beforeEach(() => {
+        // A person of the municipality's own roster: a council seat.
+        mockPersonFindUnique.mockResolvedValue({ roles: [{ administrativeBody: { type: 'council' } }] });
+    });
+
+    it('refuses to record a consent for a person whose every role is on a secondary body (#829)', async () => {
+        mockGetCurrentUser.mockResolvedValue(superadmin);
+        mockPersonFindUnique.mockResolvedValue({ roles: [{ administrativeBody: { type: 'youthCouncil' } }] });
+        await expect(recordVoicePrintConsent('person-1', true)).rejects.toThrow('own account');
+        expect(mockTransaction).not.toHaveBeenCalled();
+    });
+
+    it('still withdraws the consent of such a person on their request', async () => {
+        mockGetCurrentUser.mockResolvedValue(superadmin);
+        mockPersonFindUnique.mockResolvedValue({ roles: [{ administrativeBody: { type: 'youthCouncil' } }] });
+        txFindFirst.mockResolvedValue(open('PERSON'));
+        await recordVoicePrintConsent('person-1', false);
+        expect(txUpdate).toHaveBeenCalledWith(closed);
+    });
+
     it('opens an ADMIN period under the superadmin, for a person with no consent', async () => {
         mockGetCurrentUser.mockResolvedValue(superadmin);
         await recordVoicePrintConsent('person-1', true);

@@ -875,6 +875,7 @@
             "byAdmin": "Recorded by {recorder}, on {date}. The person cannot change it from their profile.",
             "unknownAccount": "a deleted account",
             "recordHint": "Record it only if the person gave their consent in writing, on a printed form with a physical signature. The person will see it on their profile, but will not be able to change it.",
+            "ownOnlyHint": "This person sits on a youth council only: the consent comes from their own account alone. No consent is recorded on their behalf.",
             "withdrawHint": "Withdraw it when the person asks. The consent period stays in the history.",
             "record": "Record consent",
             "withdraw": "Withdraw consent",
