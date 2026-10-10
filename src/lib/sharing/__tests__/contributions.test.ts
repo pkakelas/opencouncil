@@ -8,7 +8,7 @@ const findReferences = prisma.utterance.findMany as jest.Mock;
 const findFirst = prisma.utterance.findFirst as jest.Mock;
 const fixture = {
     id: 'contribution', text: 'Πρόταση [πηγή](REF:UTTERANCE:u1) και [άγνωστη](REF:UTTERANCE:bad).', speakerId: null, speakerName: 'Άννα', speaker: null,
-    subject: { id: 'subject', name: 'Πλατεία', councilMeeting: { id: 'meeting', cityId: 'city', administrativeBody: { showUnreviewedTranscript: true }, taskStatuses: [] } },
+    subject: { id: 'subject', name: 'Πλατεία', councilMeeting: { id: 'meeting', cityId: 'city', format: 'inPerson', closedToPublic: false, noRecording: false, administrativeBody: { showUnreviewedTranscript: true }, taskStatuses: [] } },
 };
 
 describe('public contribution references', () => {

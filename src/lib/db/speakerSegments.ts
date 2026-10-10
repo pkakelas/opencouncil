@@ -5,6 +5,7 @@ import { CouncilMeeting, City, Prisma, AdministrativeBodyType, DiscussionStatus 
 import { PersonWithRelations } from './people';
 import { isRoleActiveAt } from '../utils';
 import { roleWithRelationsInclude } from './types';
+import { PUBLIC_RECORDING_WHERE } from '@/lib/meetingLifecycleRules';
 
 export type SegmentWithRelations = {
     id: string;
@@ -490,7 +491,9 @@ export async function getLatestSegmentsForSpeaker(
     const skip = (page - 1) * pageSize;
 
     const meetingFilter: Prisma.CouncilMeetingWhereInput = {
-        ...(includeUnreleased ? {} : { released: true }),
+        // A reader gets released meetings with a public recording: a meeting
+        // closed to the public withholds its transcript. An editor gets every meeting.
+        ...(includeUnreleased ? {} : { released: true, ...PUBLIC_RECORDING_WHERE }),
         ...(administrativeBodyType ? { administrativeBody: { type: administrativeBodyType } } : {}),
         // Exclude meetings where transcript is hidden for review
         NOT: {
@@ -589,7 +592,9 @@ export async function getLatestSegmentsForParty(
     const skip = (page - 1) * pageSize;
 
     const meetingFilter: Prisma.CouncilMeetingWhereInput = {
-        ...(includeUnreleased ? {} : { released: true }),
+        // A reader gets released meetings with a public recording: a meeting
+        // closed to the public withholds its transcript. An editor gets every meeting.
+        ...(includeUnreleased ? {} : { released: true, ...PUBLIC_RECORDING_WHERE }),
         ...(administrativeBodyType ? { administrativeBody: { type: administrativeBodyType } } : {}),
         // Exclude meetings where transcript is hidden for review
         NOT: {

@@ -49,6 +49,7 @@ import { buildRelatedSubjectsQuery } from '../related';
 import { createCache } from '@/lib/cache/index';
 import { searchInRealm, searchSubjectsInRealm, searchRelatedSubjectsInRealm } from '../core';
 import type { SearchRequest } from '../types';
+import { PUBLIC_RECORDING_WHERE } from '@/lib/meetingLifecycleRules';
 
 const extractFiltersMock = extractFilters as jest.MockedFunction<typeof extractFilters>;
 const processFiltersMock = processFilters as jest.MockedFunction<typeof processFilters>;
@@ -532,5 +533,19 @@ describe('searchRelatedSubjectsInRealm', () => {
         const results = await searchRelatedSubjectsInRealm(SEED, 'city', 'greece');
 
         expect(results.map(r => [r.id, r.score])).toEqual([['near', 0.95], ['far', 0.94]]);
+    });
+});
+
+describe('searchInRealm — detailed results and the transcript of a closed meeting', () => {
+    it('reads the discussing segments of meetings with a public recording alone', async () => {
+        esSearchMock.mockResolvedValue({ hits: { total: { value: 1, relation: 'eq' }, hits: [{ _id: 's1', _score: 1, _source: { id: 's1' } }] }, took: 1 });
+        findManyMock
+            .mockResolvedValueOnce([{ id: 's1', councilMeeting: { released: true } }])
+            .mockResolvedValueOnce([{ id: 's1', name: 'Πλατεία', location: null, context: null, councilMeeting: { id: 'm1', cityId: 'chania', city: { id: 'chania' }, administrativeBody: null }, introducedBy: null, contributions: [], highlights: [], decision: null, discussedIn: [], topic: null }]);
+
+        await searchInRealm({ query: 'πλατεία', config: { extractFilters: false, detailed: true } }, 'greece');
+
+        const segmentQuery = (prisma.speakerSegment.findMany as jest.Mock).mock.calls[0][0];
+        expect(segmentQuery.where).toEqual({ utterances: { some: { discussionSubjectId: { in: ['s1'] } } }, meeting: PUBLIC_RECORDING_WHERE });
     });
 });

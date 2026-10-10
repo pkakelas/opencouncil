@@ -7,6 +7,7 @@ import { SearchRequest, SearchResponse, SearchResultLight, SearchResultDetailed,
 import { buildSearchQuery } from './query';
 import { buildRelatedSubjectsQuery, relatedScopeCityIds, RELATED_MIN_SIMILARITY, RELATED_SUBJECTS_SIZE, type RelatedSubjectSeed } from './related';
 import { bodyTier } from '@/lib/utils/bodyTier';
+import { PUBLIC_RECORDING_WHERE } from '@/lib/meetingLifecycleRules';
 import { extractFilters, processFilters, NO_EXTRACTED_FILTERS } from './filters';
 import { sendErrorAdminAlert } from '@/lib/discord-core';
 import { executeElasticsearchWithRetry } from './retry';
@@ -426,9 +427,12 @@ async function hydrateSubjectHits(hits: SubjectSearchHit[], detailed: boolean): 
     const segmentsBySubject = new Map<string, SubjectDiscussionSegment[]>();
     if (detailed && subjectIds.length > 0) {
         const subjectIdSet = new Set(subjectIds);
+        // A meeting with no public recording withholds its transcript from
+        // readers, so its segments do not surface here either.
         const segments = await prisma.speakerSegment.findMany({
             where: {
-                utterances: { some: { discussionSubjectId: { in: subjectIds } } }
+                utterances: { some: { discussionSubjectId: { in: subjectIds } } },
+                meeting: PUBLIC_RECORDING_WHERE,
             },
             include: subjectDiscussionSegmentInclude,
             orderBy: { startTimestamp: 'asc' }
